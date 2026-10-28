@@ -4,12 +4,11 @@ import threading
 import unittest
 from functools import partial
 from http.client import HTTPConnection
-from http.server import ThreadingHTTPServer
 
 import psycopg
 
-from server import (DEFAULT_DATABASE, DEFAULT_SCHEMA, ROOT, CardwiseHandler, CatalogError, build_catalog,
-                    fetch_tables, text)
+from server import (DEFAULT_DATABASE, DEFAULT_SCHEMA, ROOT, CardwiseHandler, CardwiseServer, CatalogError,
+                    build_catalog, fetch_tables, text)
 
 
 def database_tables():
@@ -284,7 +283,7 @@ class ApiTests(unittest.TestCase):
     def setUpClass(cls):
         cls.source = database_tables()
         handler = partial(CardwiseHandler, directory=str(ROOT), load=lambda: cls.load())
-        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        cls.server = CardwiseServer(("127.0.0.1", 0), handler)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
 
@@ -354,6 +353,10 @@ class ApiTests(unittest.TestCase):
         status, _, body = self.request("/")
         self.assertEqual(status, 200)
         self.assertIn(b"Cardwise", body)
+
+    def test_second_server_cannot_take_a_busy_port(self):
+        with self.assertRaises(OSError):
+            CardwiseServer(("127.0.0.1", self.server.server_port), CardwiseHandler).server_close()
 
     def test_backend_sources_are_not_public(self):
         for path in ("/db/001_category_sort_order.sql", "/requirements.txt", "/server.py", "/test_server.py",

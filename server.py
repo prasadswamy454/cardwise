@@ -224,6 +224,11 @@ def load_catalog(database: str = DEFAULT_DATABASE, schema: str = DEFAULT_SCHEMA)
     return build_catalog(fetch_tables(database, schema))
 
 
+class CardwiseServer(ThreadingHTTPServer):
+    # On Windows SO_REUSEADDR lets a second server bind a busy port while the first keeps answering.
+    allow_reuse_address = os.name != "nt"
+
+
 class CardwiseHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, load: Callable[[], Catalog] = load_catalog, **kwargs):
         self.load = load
@@ -280,7 +285,11 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     handler = partial(CardwiseHandler, directory=str(ROOT), load=partial(load_catalog, args.database, args.schema))
-    with ThreadingHTTPServer((args.host, args.port), handler) as server:
+    try:
+        server = CardwiseServer((args.host, args.port), handler)
+    except OSError as error:
+        parser.exit(1, f"Cannot listen on {args.host}:{args.port} ({error}). Is another Cardwise server already running?\n")
+    with server:
         logging.info("Cardwise running at http://%s:%s", args.host, args.port)
         try:
             server.serve_forever()

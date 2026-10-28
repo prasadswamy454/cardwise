@@ -1,19 +1,33 @@
-"""Serve Cardwise and a validated, CSV-backed catalog. No external dependencies."""
+"""Serve Cardwise and a validated, PostgreSQL-backed catalog."""
 
 import argparse
-import csv
 import json
 import logging
 import math
+import os
 import re
+from collections.abc import Callable
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import NotRequired, TypedDict
 from urllib.parse import urlsplit
 
+import psycopg
+from psycopg import sql
+
 
 ROOT = Path(__file__).resolve().parent
+# libpq connection string; the password comes from pgpass.conf (or PGPASSWORD), never from source.
+DEFAULT_DATABASE = "host=localhost port=5432 dbname=cardwise user=cardwise_app"
+DEFAULT_SCHEMA = "prod"
+TABLES = {
+    "categories": ("id", "name", "icon"),
+    "cards": ("id", "name", "issuer", "style", "unit", "base", "foreign_fee", "summary",
+              "cap", "cap_period", "activation", "default_wallet", "source_url", "reviewed_on", "limitations"),
+    "reward_rules": ("card_id", "category_ids", "channel", "rate", "capped", "description"),
+}
+ORDER_BY = {"categories": ("sort_order",), "cards": ("id",), "reward_rules": ("card_id", "category_ids", "channel")}
 STYLES = {"jade", "midnight", "sand", "plum", "blue", "copper"}
 CHANNELS = {"in-person", "online", "portal"}
 PUBLIC_FILES = {"/", "/index.html", "/styles.css", "/app.js", "/rewards.js", "/tests.html", "/tests.js"}
@@ -62,17 +76,30 @@ class Catalog(TypedDict):
     defaultWallet: list[str]
 
 
-def read_rows(path: Path, columns: tuple[str, ...]) -> list[dict[str, str]]:
-    with path.open(newline="", encoding="utf-8-sig") as source:
-        reader = csv.DictReader(source, strict=True)
-        if reader.fieldnames != list(columns):
-            raise CatalogError(f"{path.name}: expected columns {', '.join(columns)}")
-        rows = []
-        for row in reader:
-            if None in row or any(value is None for value in row.values()):
-                raise CatalogError(f"{path.name}, line {reader.line_num}: wrong column count")
-            rows.append({key: value.strip() for key, value in row.items()})
-        return rows
+Tables = dict[str, list[dict[str, str]]]
+
+
+def text(value: object) -> str:
+    """Normalize a database value to the text form the validators expect (NULL becomes empty)."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value).strip()
+
+
+def fetch_tables(database: str, schema: str) -> Tables:
+    tables: Tables = {}
+    with psycopg.connect(database, connect_timeout=5) as connection:
+        connection.read_only = True
+        for table, columns in TABLES.items():
+            query = sql.SQL("SELECT {} FROM {} ORDER BY {}").format(
+                sql.SQL(", ").join(map(sql.Identifier, columns)),
+                sql.Identifier(schema, table),
+                sql.SQL(", ").join(map(sql.Identifier, ORDER_BY[table])))
+            rows = connection.execute(query).fetchall()
+            tables[table] = [{column: text(value) for column, value in zip(columns, row)} for row in rows]
+    return tables
 
 
 def number(value: str, field: str, maximum: float = 1000) -> float:
@@ -103,10 +130,10 @@ def required(value: str, field: str) -> str:
     return value
 
 
-def load_catalog(data_dir: Path) -> Catalog:
+def build_catalog(tables: Tables) -> Catalog:
     categories: list[Category] = []
     category_ids: set[str] = set()
-    for row in read_rows(data_dir / "categories.csv", ("id", "name", "icon")):
+    for row in tables["categories"]:
         category_id = identifier(row["id"], "category id")
         if category_id in category_ids:
             raise CatalogError(f"Duplicate category: {category_id}")
@@ -118,9 +145,7 @@ def load_catalog(data_dir: Path) -> Catalog:
 
     cards: dict[str, Card] = {}
     default_wallet: list[str] = []
-    columns = ("id", "name", "issuer", "style", "unit", "base", "foreign_fee", "summary",
-               "cap", "cap_period", "activation", "default_wallet", "source_url", "reviewed_on", "limitations")
-    for row in read_rows(data_dir / "cards.csv", columns):
+    for row in tables["cards"]:
         card_id = identifier(row["id"], "card id")
         if card_id in cards:
             raise CatalogError(f"Duplicate card: {card_id}")
@@ -159,8 +184,7 @@ def load_catalog(data_dir: Path) -> Catalog:
         raise CatalogError("At least one card is required")
 
     rule_keys: set[tuple[str, str, str]] = set()
-    for row in read_rows(data_dir / "reward_rules.csv",
-                         ("card_id", "category_ids", "channel", "rate", "capped", "description")):
+    for row in tables["reward_rules"]:
         card_id = row["card_id"]
         if card_id not in cards:
             raise CatalogError(f"Reward rule refers to unknown card: {card_id}")
@@ -196,9 +220,13 @@ def load_catalog(data_dir: Path) -> Catalog:
     return Catalog(cards=list(cards.values()), categories=categories, defaultWallet=default_wallet)
 
 
+def load_catalog(database: str = DEFAULT_DATABASE, schema: str = DEFAULT_SCHEMA) -> Catalog:
+    return build_catalog(fetch_tables(database, schema))
+
+
 class CardwiseHandler(SimpleHTTPRequestHandler):
-    def __init__(self, *args, data_dir: Path = ROOT / "data", **kwargs):
-        self.data_dir = data_dir
+    def __init__(self, *args, load: Callable[[], Catalog] = load_catalog, **kwargs):
+        self.load = load
         super().__init__(*args, **kwargs)
 
     def end_headers(self) -> None:
@@ -219,10 +247,10 @@ class CardwiseHandler(SimpleHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/api/catalog":
             try:
-                catalog = load_catalog(self.data_dir)
-            except (OSError, UnicodeError, csv.Error, CatalogError):
-                logging.exception("Could not load the CSV card catalog")
-                self.send_json(500, {"error": "Card catalog could not be loaded. Check the server logs and CSV files."}, head_only)
+                catalog = self.load()
+            except (psycopg.Error, CatalogError):
+                logging.exception("Could not load the card catalog from PostgreSQL")
+                self.send_json(500, {"error": "Card catalog could not be loaded. Check the server logs and database."}, head_only)
                 return
             self.send_json(200, catalog, head_only)
         elif path.startswith("/api/"):
@@ -246,9 +274,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=5173)
     parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--database", default=os.environ.get("CARDWISE_DATABASE", DEFAULT_DATABASE),
+                        help="libpq connection string (default: $CARDWISE_DATABASE or %(default)s)")
+    parser.add_argument("--schema", default=os.environ.get("CARDWISE_SCHEMA", DEFAULT_SCHEMA))
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-    handler = partial(CardwiseHandler, directory=str(ROOT))
+    handler = partial(CardwiseHandler, directory=str(ROOT), load=partial(load_catalog, args.database, args.schema))
     with ThreadingHTTPServer((args.host, args.port), handler) as server:
         logging.info("Cardwise running at http://%s:%s", args.host, args.port)
         try:

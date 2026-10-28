@@ -1,26 +1,36 @@
 # Cardwise
 
-A responsive credit-card rewards MVP. Native HTML, CSS, and JavaScript frontend with a Python standard-library backend and CSV-backed catalog. No database, dependency installation, build step, bank linking, or external services.
+A responsive credit-card rewards MVP. Native HTML, CSS, and JavaScript frontend with a Python backend and a PostgreSQL-backed catalog. No build step, bank linking, or external services.
 
 ## Run
 
-Requires Python 3.11 or newer. From this directory:
+Requires Python 3.11 or newer and a local PostgreSQL database. From this directory:
 
 ```sh
-python3 server.py
+python3 -m venv .venv
+.venv/Scripts/python -m pip install -r requirements.txt   # macOS/Linux: .venv/bin/python
+.venv/Scripts/python server.py
 ```
 
-Open <http://127.0.0.1:5173>. This one process serves both the app and its API. A plain `http.server` is no longer sufficient. Stop with Ctrl+C. Optionally select a different local port with `python3 server.py --port 8000`. This is a local development server, not a production deployment server.
+Open <http://127.0.0.1:5173>. This one process serves both the app and its API. A plain `http.server` is no longer sufficient. Stop with Ctrl+C. Optionally select a different local port with `server.py --port 8000`. This is a local development server, not a production deployment server.
 
-## CSV catalog and API
+### Database connection
 
-The backend reads these files on every `GET /api/catalog` request:
+By default the server connects with `host=localhost port=5432 dbname=cardwise user=cardwise_app` and reads schema `prod`. Override with `--database "<libpq connection string>"` / `--schema <name>`, or the `CARDWISE_DATABASE` / `CARDWISE_SCHEMA` environment variables.
 
-- [data/cards.csv](./data/cards.csv): identity, issuer, appearance, reward unit, base rate, foreign transaction fee, cap, activation requirement, summary, default-wallet selection, issuer source URL, optional source-page review date, and calculation limitations.
-- [data/reward_rules.csv](./data/reward_rules.csv): bonus rates linked to cards and categories, channel restrictions, cap applicability, and descriptions.
-- [data/categories.csv](./data/categories.csv): available spending categories and display icons.
+Never put the password in source or the connection string. Store it in a [pgpass file](https://www.postgresql.org/docs/current/libpq-pgpass.html) (`%APPDATA%\postgresql\pgpass.conf` on Windows, `~/.pgpass` elsewhere) as `localhost:5432:cardwise:cardwise_app:<password>`. The `cardwise_app` role only needs `CONNECT` on the database, `USAGE` on `prod`, and `SELECT` on its tables; the server opens read-only transactions.
 
-**Edit a CSV and refresh the browser to see the change; no server restart or JavaScript edits are needed.** The app fetches the catalog once at startup, before restoring saved wallet selections. Existing wallets override the default-wallet flags. Reset demo to apply changed defaults.
+One-time schema change: run [db/001_category_sort_order.sql](./db/001_category_sort_order.sql) as the table owner (for example `postgres` in pgAdmin). It adds `prod.categories.sort_order`, which sets the category display order; the first category is preselected.
+
+## Database catalog and API
+
+The backend queries these tables on every `GET /api/catalog` request:
+
+- `prod.cards`: identity, issuer, appearance, reward unit, base rate, foreign transaction fee, cap, activation requirement, summary, default-wallet selection, issuer source URL, optional source-page review date, and calculation limitations.
+- `prod.reward_rules`: bonus rates linked to cards and categories, channel restrictions, cap applicability, and descriptions.
+- `prod.categories`: available spending categories, display icons, and `sort_order`.
+
+**Change a row and refresh the browser to see the change; no server restart or JavaScript edits are needed.** The app fetches the catalog once at startup, before restoring saved wallet selections. Existing wallets override the default-wallet flags. Reset demo to apply changed defaults.
 
 `GET /api/catalog` returns:
 
@@ -54,10 +64,11 @@ The backend reads these files on every `GET /api/catalog` request:
 
 ### Editing conventions
 
-- Keep the exact CSV column headers. Use UTF-8 (a spreadsheet BOM is supported) and standard CSV quoting for commas, quotes, and multiline text.
+- Keep the existing column names. Empty text and `NULL` are treated the same.
+- In the current schema `reward_rules.rate` and `cards.cap` are `integer` columns, so a fractional bonus rate (for example `1.5`) needs `rate` changed to `numeric` first. `cards.base` and `cards.foreign_fee` already accept decimals.
 - IDs must begin with a lowercase letter and contain only lowercase letters, digits, or hyphens. Keep IDs stable so saved wallets continue to work.
 - Use `cash` or `points` for `unit`. Cash rates and fees are percentages (enter `3`, not `0.03`); point rates are points per dollar.
-- Use lowercase `true` or `false` for boolean columns. `default_wallet` seeds new/reset wallets only.
+- Boolean columns must be `true` or `false`, not `NULL`. `default_wallet` seeds new/reset wallets only.
 - Valid styles: `jade`, `midnight`, `sand`, `plum`, `blue`, `copper`.
 - Leave `cap` and `cap_period` blank for uncapped cards. Otherwise set a positive bonus-category spending cap and `annual` or `quarterly`. Mark applicable reward rules `capped=true`. Capped rules on a card share its spending allowance.
 - For reward rules, separate multiple category IDs with `|`. Leave `channel` blank for all channels, or use `in-person`, `online`, or `portal`. Channel-specific rules take priority by rate among eligible rules. A bonus rate must be at least the card's base rate.
@@ -65,7 +76,7 @@ The backend reads these files on every `GET /api/catalog` request:
 - Update display summaries/descriptions when changing numeric reward rules; calculations use numeric fields, not display text.
 - Real-card entries require an HTTPS `source_url` and nonempty `limitations`. Set `reviewed_on` to the date the source page was actually inspected (`YYYY-MM-DD`); leave it blank for unverified reference entries. A page review is not certification that every pricing/rewards term was verified. Leave all three fields blank only for fictional examples.
 
-The backend validates headers, row shapes, identifiers, duplicates, references, numeric ranges, booleans, caps, units, and channels before returning data. Invalid or missing CSVs return HTTP 500 with a JSON error and server-side logs; unknown API routes return JSON 404. The client also validates the response, disables comparison until loading succeeds, and offers a retry on failure. There is no hardcoded-card fallback. Raw CSVs and backend source files are not served as public assets.
+The backend validates identifiers, duplicates, references, numeric ranges, booleans, caps, units, and channels before returning data; the tables have no constraints of their own, so this validation is the safety net. Invalid data, a missing table or column, or an unreachable database return HTTP 500 with a JSON error and server-side logs; unknown API routes return JSON 404. The client also validates the response, disables comparison until loading succeeds, and offers a retry on failure. There is no hardcoded-card fallback. Backend source and SQL files are not served as public assets.
 
 ## Features
 
@@ -104,7 +115,7 @@ Chase-specific exclusions are visible per card: Freedom Flex rotating categories
 
 Point values are user estimates, not guaranteed cash redemption values. One shared cents-per-point input applies to every points card; it is not a card-specific redemption quote. Annual fees, interest, welcome bonuses, targeted offers, statement credits, redemption constraints, and booking-price differences are excluded. Compare only purchases you would otherwise make; rewards do not offset the costs of carrying debt.
 
-Card details come from the backend CSV catalog; reward calculations still run in the browser. There is no account sync, bank connection, analytics, or live issuer-data feed. Wallet selections, point valuation, and manually tracked spending stay in the current browser profile and are not sent to the backend or encrypted. Do not enter sensitive card information.
+Card details come from the backend PostgreSQL catalog; reward calculations still run in the browser. There is no account sync, bank connection, analytics, or live issuer-data feed. Wallet selections, point valuation, and manually tracked spending stay in the current browser profile and are not sent to the backend or encrypted. Do not enter sensitive card information.
 
 ### Discover Catalog
 
@@ -153,10 +164,12 @@ In **Manage wallet**, filter by either issuer and clear the search field to see 
 Run backend parsing and HTTP integration tests:
 
 ```sh
-python3 -m unittest -v test_server.py
+.venv/Scripts/python -m unittest -v test_server.py
 ```
 
-With the backend running, open <http://127.0.0.1:5173/tests.html>. The browser suite loads the CSV-backed catalog, then checks reward calculations, cap boundaries, activation, channel restrictions, point valuation, fees, ties, invalid inputs, saved-state validation, API/source validation, real-issuer coverage, and non-mutation. Fictional fixtures isolate the original engine tests from the real-card defaults. Real-card tests cover gas versus EV, grocery caps, online channels, combined quarterly caps, and Bilt base rates. Tests prove the modeled calculations, not the accuracy of issuer terms.
+The tests read the live `prod` tables once and make every edit on in-memory copies; they never write to the database. They are skipped if PostgreSQL is unreachable.
+
+With the backend running, open <http://127.0.0.1:5173/tests.html>. The browser suite loads the database-backed catalog, then checks reward calculations, cap boundaries, activation, channel restrictions, point valuation, fees, ties, invalid inputs, saved-state validation, API/source validation, real-issuer coverage, and non-mutation. Fictional fixtures isolate the original engine tests from the real-card defaults. Real-card tests cover gas versus EV, grocery caps, online channels, combined quarterly caps, and Bilt base rates. Tests prove the modeled calculations, not the accuracy of issuer terms.
 
 ## Structure
 
@@ -164,11 +177,12 @@ With the backend running, open <http://127.0.0.1:5173/tests.html>. The browser s
 - [styles.css](./styles.css): responsive interface
 - [app.js](./app.js): wallet persistence, interactions, and rendering
 - [rewards.js](./rewards.js): API loading, catalog/state validation, and deterministic calculation engine
-- [server.py](./server.py): CSV parsing/validation, JSON API, and static asset serving
-- [data/](./data/): editable CSV catalog and reward rules
-- [test_server.py](./test_server.py): CSV parser and HTTP API tests
+- [server.py](./server.py): PostgreSQL reads, catalog validation, JSON API, and static asset serving
+- [db/](./db/): one-time SQL changes to run against the database
+- [requirements.txt](./requirements.txt): the PostgreSQL driver (`psycopg`)
+- [test_server.py](./test_server.py): catalog validation and HTTP API tests
 - [tests.js](./tests.js) and [tests.html](./tests.html): browser-executable tests
 
 ## Production next steps
 
-Verify every reference entry against authorized issuer rewards and pricing terms, record effective dates, and establish an ongoing review process. Add merchant classification, card-specific point valuations, omitted benefit categories, selectable-category rules, and offer/cap-period lifecycle handling before claiming complete real-world recommendations. The `/api/catalog` contract can remain unchanged when replacing CSV reads with database queries. Add authentication and wallet storage only if users need cross-device sync; keep sensitive payment data out of this application.
+Verify every reference entry against authorized issuer rewards and pricing terms, record effective dates, and establish an ongoing review process. Add merchant classification, card-specific point valuations, omitted benefit categories, selectable-category rules, and offer/cap-period lifecycle handling before claiming complete real-world recommendations. Add primary keys, foreign keys, `NOT NULL`, and check constraints to the `prod` tables so the database rejects bad rows itself, and give `reward_rules` an explicit order column. Add authentication and wallet storage only if users need cross-device sync; keep sensitive payment data out of this application.

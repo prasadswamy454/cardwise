@@ -175,7 +175,7 @@ async function initialize() {
     await loadCatalog();
   } catch (error) {
     console.error("Could not load Cardwise catalog:", error);
-    $("#catalog-error").textContent = "Card details could not be loaded. Start the backend with python3 server.py, check the CSV files, then retry.";
+    $("#catalog-error").textContent = "Card details could not be loaded. Start the backend with python server.py, check the database connection, then retry.";
     $("#catalog-notice").hidden = false;
     $("#retry-catalog").disabled = false;
     $("#results").innerHTML = `<div class="empty-results"><h2 id="results-heading">Card catalog unavailable</h2><p>Comparisons are disabled until valid catalog data can be loaded. No sample fallback is used.</p></div>`;

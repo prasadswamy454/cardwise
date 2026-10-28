@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Cardwise reward engine tests</title><link rel="stylesheet" href="./styles.css"></head>
+<body style="padding:30px">
+  <h1>Reward engine tests</h1>
+  <p id="summary" role="status">Running…</p>
+  <ol id="test-results"></ol>
+  <script type="module">
+    import { runTests } from "./tests.js";
+    import { loadCatalog } from "./rewards.js";
+    let results;
+    try {
+      await loadCatalog();
+      results = runTests();
+    } catch (error) {
+      console.error("Test catalog could not be loaded:", error);
+      results = [{ name: "Load catalog from backend", passed: false, error: error.message }];
+    }
+    const failed = results.filter(result => !result.passed);
+    document.querySelector("#summary").textContent = `${results.length - failed.length}/${results.length} passed`;
+    for (const result of results) {
+      const item = document.createElement("li");
+      item.textContent = `${result.passed ? "PASS" : "FAIL"}: ${result.name}${result.error ? ` — ${result.error}` : ""}`;
+      item.style.color = result.passed ? "#164b3c" : "#a13d32";
+      document.querySelector("#test-results").append(item);
+    }
+    document.body.dataset.testStatus = failed.length ? "failed" : "passed";
+  </script>
+</body>
+</html>

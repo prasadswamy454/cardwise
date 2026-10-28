@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#153f35">
+    <meta name="description" content="Compare credit-card rewards with issuer-linked reference terms and a private local wallet.">
+    <title>Cardwise — Make every swipe count</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23153f35'/%3E%3Cpath d='M44 20a18 18 0 1 0 0 24M34 22l-9 10 9 10' fill='none' stroke='%23d4efad' stroke-width='6'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="./styles.css">
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <a class="brand" href="./" aria-label="Cardwise home"><span class="brand-mark">c<span>↗</span></span>cardwise<span class="brand-dot">.</span></a>
+      <div class="workspace-label">YOUR MONEY, SMARTER</div>
+      <nav aria-label="Main navigation">
+        <a class="nav-link active" href="#compare"><span aria-hidden="true">▦</span> Best card finder <span class="nav-dot"></span></a>
+        <a class="nav-link" href="#wallet"><span aria-hidden="true">▱</span> My wallet <span id="wallet-count" class="count">—</span></a>
+        <button class="nav-link" id="how-button"><span aria-hidden="true">ⓘ</span> How it works</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="privacy-icon" aria-hidden="true">◇</div>
+        <strong>Your wallet. Your business.</strong>
+        <p>No bank connections. No card numbers. Your wallet stays in this browser.</p>
+        <span class="local-status"><span></span> Local-first by design</span>
+      </div>
+      <div class="sidebar-footer">A little clarity. A better swipe.</div>
+    </aside>
+    <div class="main-shell">
+      <header class="topbar"><span>Your everyday rewards companion</span><span class="demo-pill"><span></span> DEMO WORKSPACE</span></header>
+      <main>
+        <div id="storage-notice" class="notice" role="alert" hidden></div>
+        <div id="catalog-notice" class="notice" role="alert" hidden><p id="catalog-error"></p><button id="retry-catalog" class="button secondary">Retry loading cards</button></div>
+        <section class="page-heading">
+          <div><p class="eyebrow">LESS GUESSWORK. MORE REWARDS.</p><h1>Make every swipe count<span>.</span></h1><p class="subtitle">The right card is already in your wallet. Let’s find it.</p></div>
+          <button class="button secondary" id="manage-top" disabled><span aria-hidden="true">＋</span> Manage wallet</button>
+        </section>
+        <div class="intro-strip"><span class="spark" aria-hidden="true">✦</span><p><strong>A smarter choice, not another credit card.</strong> Compare the cards you own before you pay.</p><span class="strip-tag">No sign-up needed</span></div>
+        <div class="dashboard">
+          <section class="panel purchase-panel" id="compare" aria-labelledby="purchase-heading">
+            <div class="section-label"><span class="step-number">01</span> THE PURCHASE</div>
+            <h2 id="purchase-heading">What are you spending on?</h2>
+            <p class="section-description">A few details. Your best card, in seconds.</p>
+            <form id="purchase-form">
+              <fieldset id="purchase-controls" disabled>
+              <fieldset><legend>Spending category</legend><div class="category-grid" id="categories"></div></fieldset>
+              <label for="amount">Purchase amount <span class="field-hint">USD</span></label>
+              <div class="amount-input"><span aria-hidden="true">$</span><input id="amount" name="amount" type="number" value="250" min="0.01" max="1000000000" step="0.01" required inputmode="decimal" aria-describedby="input-error"></div>
+              <div class="form-row"><div><label for="channel">How will you pay?</label><select id="channel"><option value="in-person">In person / direct</option><option value="online">Online / direct</option><option value="portal">Card travel portal</option></select></div><div><label for="point-value">Point value <span class="field-hint">¢ / point</span></label><input id="point-value" type="number" min="0.1" max="10" step="0.1" value="1" required aria-describedby="point-help input-error"></div></div>
+              <p class="input-help" id="point-help">Point value is your estimate, not a guaranteed redemption rate.</p>
+              <label class="checkbox-label"><input type="checkbox" id="foreign"> Purchase has a foreign transaction fee</label>
+              <p id="input-error" class="error" role="alert" hidden></p>
+              <button class="button primary compare-button" type="submit">Find my best card <span aria-hidden="true">↗</span></button>
+              </fieldset>
+            </form>
+            <div class="purchase-footnote"><span aria-hidden="true">◇</span> No credit checks. Just the math.</div>
+          </section>
+          <section class="results-column" aria-labelledby="results-heading">
+            <div class="results-heading"><div class="section-label"><span class="step-number">02</span> YOUR BEST MOVE</div><span class="live-pill">Based on your wallet</span></div>
+            <div id="results" aria-live="polite" aria-atomic="true"><div class="empty-results"><h2 id="results-heading">Loading card catalog…</h2><p>Getting card details and reward rules from the backend.</p></div></div>
+          </section>
+        </div>
+        <section class="wallet-section" id="wallet" aria-labelledby="wallet-heading">
+          <div class="wallet-heading"><div><p class="eyebrow">GOOD CARDS. BETTER TOGETHER.</p><h2 id="wallet-heading">Your wallet <span id="wallet-total"></span></h2></div><button id="manage-wallet" class="text-button" disabled>Edit wallet <span aria-hidden="true">↗</span></button></div>
+          <div id="wallet-cards" class="wallet-grid"></div>
+        </section>
+        <footer class="page-footer"><span class="footer-brand">cardwise.</span><p>Reference rates, not a live issuer feed. Verify current terms, fees and merchant eligibility.<br>Estimates exclude annual fees, welcome offers, interest, and some category bonuses.</p><button id="reset-button" class="text-button" disabled>Reset demo</button></footer>
+      </main>
+    </div>
+    <dialog id="wallet-dialog" aria-labelledby="dialog-heading">
+      <div class="dialog-heading"><div><p class="eyebrow">MAKE IT YOURS</p><h2 id="dialog-heading">Build your wallet</h2></div><button class="icon-button" id="close-wallet" aria-label="Close wallet editor">×</button></div>
+      <p class="section-description">Issuer-linked reference cards. Rates may be incomplete or unverified; official terms control eligibility.</p>
+      <div class="catalog-filters"><div><label for="catalog-search">Search cards</label><input id="catalog-search" type="search" placeholder="Card name, issuer or rewards"></div><div><label for="catalog-issuer">Issuer</label><select id="catalog-issuer"><option value="">All issuers</option></select></div></div>
+      <p id="catalog-count" class="input-help" role="status"></p>
+      <div id="catalog-list"></div>
+      <button class="button primary full-width" id="done-wallet">Done editing</button>
+    </dialog>
+    <dialog id="how-dialog" aria-labelledby="how-heading">
+      <div class="dialog-heading"><h2 id="how-heading">Good rewards start with clear rules.</h2><button class="icon-button" id="close-how" aria-label="Close explanation">×</button></div>
+      <ol class="how-list"><li><strong>Choose your cards.</strong> Real-card entries link to issuer terms and disclose excluded rewards. Fictional examples are marked Demo. No account or sensitive information required.</li><li><strong>Describe the purchase.</strong> Select the merchant’s actual rewards category, amount, and payment channel. Merchant names alone do not guarantee eligibility.</li><li><strong>Compare net value.</strong> We apply modeled rates, remaining caps, activation, your point valuation, and foreign fees. Ties are shown as equal-value choices.</li></ol>
+      <p class="notice">Cap spending is manually tracked, not synced, and does not auto-reset. These reference estimates are not financial advice or a complete issuer-benefit comparison. Unverified entries require checking current issuer terms. Housing rewards, relationship boosts and some portal bonuses are excluded.</p>
+    </dialog>
+  </body>
+</html>

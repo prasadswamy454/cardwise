@@ -138,8 +138,10 @@ async function locateIfAllowed() {
   }
 }
 
+const cardImage = card => card.imageUrl ? `<img class="card-image" src="${escape(card.imageUrl)}" alt="">` : "";
+
 function cardArt(card, small = false) {
-  return `<div class="credit-card ${card.style} ${small ? "mini-card" : ""}" aria-hidden="true"><div class="card-top"><span>${escape(card.issuer)}</span><span class="contactless">)))</span></div><div class="chip"></div><div class="card-bottom"><span>${escape(card.name)}</span><span class="card-symbol">◒◒</span></div></div>`;
+  return `<div class="credit-card ${card.style} ${small ? "mini-card" : ""}" aria-hidden="true"><div class="card-top"><span>${escape(card.issuer)}</span><span class="contactless">)))</span></div><div class="chip"></div><div class="card-bottom"><span>${escape(card.name)}</span><span class="card-symbol">◒◒</span></div>${cardImage(card)}</div>`;
 }
 
 function cardTerms(card) {
@@ -155,7 +157,7 @@ function renderCatalog() {
     .sort((first, second) => Number(Boolean(second.sourceUrl)) - Number(Boolean(first.sourceUrl)) ||
       first.issuer.localeCompare(second.issuer) || first.name.localeCompare(second.name));
   $("#catalog-count").textContent = `${matches.length} card${matches.length === 1 ? "" : "s"}`;
-  $("#catalog-list").innerHTML = matches.map(card => `<div class="catalog-entry"><label class="catalog-card"><input type="checkbox" data-card="${card.id}" ${state.wallet.includes(card.id) ? "checked" : ""}><span class="catalog-swatch ${card.style}" aria-hidden="true"></span><span><strong>${escape(card.name)}${card.sourceUrl ? "" : " (Demo)"}</strong><span>${escape(card.issuer)} · ${escape(card.summary)}</span></span></label>${cardTerms(card)}</div>`).join("") || `<p class="input-help">No matching cards.</p>`;
+  $("#catalog-list").innerHTML = matches.map(card => `<div class="catalog-entry"><label class="catalog-card"><input type="checkbox" data-card="${card.id}" ${state.wallet.includes(card.id) ? "checked" : ""}><span class="catalog-swatch ${card.style}" aria-hidden="true">${cardImage(card)}</span><span><strong>${escape(card.name)}${card.sourceUrl ? "" : " (Demo)"}</strong><span>${escape(card.issuer)} · ${escape(card.summary)}</span></span></label>${cardTerms(card)}</div>`).join("") || `<p class="input-help">No matching cards.</p>`;
 }
 
 function renderWallet() {
@@ -213,7 +215,7 @@ function compare() {
       <div class="winner-insight"><span aria-hidden="true">↗</span><p>${allNegative ? "Fees outweigh rewards on every card in this wallet. Consider a fee-free payment method." : tied.length > 1 ? `Equal estimated value with ${tied.slice(1).map(result => escape(result.card.name)).join(", ")}. Choose based on your other benefits.` : next ? `<strong>${money(best.net - next.net)} more</strong> than your next-best card on this purchase.` : "Add another card to compare this estimate with alternatives."}</p></div>
     </article>
     <div class="comparison-header"><h3>The full picture</h3><span>${ranked.length} card${ranked.length === 1 ? "" : "s"} compared</span></div>
-    <div class="comparison-list">${ranked.map((result, index) => `<div class="comparison-row"><span class="rank">${String(index + 1).padStart(2, "0")}</span><span class="tiny-card ${result.card.style}" aria-hidden="true"></span><div class="comparison-name"><strong>${escape(result.card.name)}</strong><span>${result.effectiveRate.toFixed(2)}% value${result.fee ? ` · ${money(result.fee)} fee` : ""}</span></div><strong class="comparison-value">${money(result.net)}${result.netCents === best.netCents ? `<span class="best-label">${tied.length > 1 ? "TIED BEST" : "BEST"}</span>` : ""}</strong></div>`).join("")}</div>
+    <div class="comparison-list">${ranked.map((result, index) => `<div class="comparison-row"><span class="rank">${String(index + 1).padStart(2, "0")}</span><span class="tiny-card ${result.card.style}" aria-hidden="true">${cardImage(result.card)}</span><div class="comparison-name"><strong>${escape(result.card.name)}</strong><span>${result.effectiveRate.toFixed(2)}% value${result.fee ? ` · ${money(result.fee)} fee` : ""}</span></div><strong class="comparison-value">${money(result.net)}${result.netCents === best.netCents ? `<span class="best-label">${tied.length > 1 ? "TIED BEST" : "BEST"}</span>` : ""}</strong></div>`).join("")}</div>
     <details class="assumptions"><summary>Behind the numbers <span aria-hidden="true">＋</span></summary><p>${store ? `${escape(store.name)} is treated as ${escape(category.name)} based on its map listing. Your issuer may code it differently. ` : ""}Category eligibility is assumed. Superstores and warehouse clubs may not qualify as supermarkets. Check each issuer’s terms.</p>${ranked.map(result => `<div><strong>${escape(result.card.name)}</strong><p>${escape(result.explanation)}. Gross rewards: ${money(result.gross)}; fees: ${money(result.fee)}.</p>${result.notes.length ? `<ul>${result.notes.map(note => `<li>${escape(note)}</li>`).join("")}</ul>` : ""}</div>`).join("")}<p>Annual fees, interest, welcome offers, and price differences between booking channels are not included. Demo rules are not current issuer offers.</p></details>`;
 }
 
@@ -267,6 +269,15 @@ $("#catalog-list").addEventListener("change", event => {
   compare();
   document.querySelector(`[data-card="${input.dataset.card}"]`)?.focus();
 });
+// Image events don't bubble, so listen during capture. Removing a broken image reveals the colored design.
+document.addEventListener("error", event => {
+  if (event.target.classList?.contains("card-image")) event.target.remove();
+}, true);
+// Tall images are shown whole rather than cropped to the landscape card shape.
+document.addEventListener("load", event => {
+  const image = event.target;
+  if (image.classList?.contains("card-image")) image.classList.toggle("portrait", image.naturalHeight > image.naturalWidth);
+}, true);
 $("#wallet-cards").addEventListener("click", event => {
   const id = event.target.closest("[data-remove]")?.dataset.remove;
   if (!id) return;

@@ -37,6 +37,12 @@ export function runTests() {
       { stores: [{ ...store, name: "" }], source: "google" }, { stores: [{ ...store, category: "unknown" }], source: "google" },
       { stores: [{ ...store, distance: -1 }], source: "google" }].forEach(value => equal(validStores(value), false));
   });
+  test("Card images must be local files in the images folder", () => {
+    const withImage = imageUrl => ({ cards: [{ ...cards[0], imageUrl }], categories, defaultWallet: [] });
+    equal(validCatalog(withImage("images/my-card.webp")), true);
+    ["https://example.com/card.png", "images/../server.py", "images/card.svg", "images/card.png'", 5].forEach(value =>
+      equal(validCatalog(withImage(value)), false));
+  });
   test("Default wallet is valid", () => equal(validState(defaultState()), true));
   test("Loaded API catalog is valid", () => equal(validCatalog({ cards, categories, defaultWallet: defaultState().wallet }), true));
   test("Malformed API catalogs rejected", () => {

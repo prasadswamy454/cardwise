@@ -1,0 +1,58 @@
+-- Points cards at the rest of the local images in the images/ folder.
+-- Those files are not in git, so a fresh checkout shows the colored designs until they are added.
+-- Run once as a role that owns prod.cards (for example postgres, in pgAdmin's Query Tool), connected to cardwise.
+-- It should report UPDATE 49.
+UPDATE prod.cards AS c
+SET image_url = v.image_url
+FROM (VALUES
+  ('amex-blue-cash-everyday', 'images/amex-blue-cash-everyday.jpeg'),
+  ('amex-blue-cash-preferred', 'images/amex-blue-cash-preferred.jpeg'),
+  ('amex-delta-blue', 'images/amex-delta-blue.jpeg'),
+  ('amex-delta-gold', 'images/amex-delta-gold.jpeg'),
+  ('amex-delta-platinum', 'images/amex-delta-platinum.jpeg'),
+  ('amex-delta-reserve', 'images/amex-delta-reserve.jpeg'),
+  ('amex-gold', 'images/amex-gold.jpeg'),
+  ('amex-platinum', 'images/amex-platinum.jpeg'),
+  ('bilt-blue', 'images/bilt-blue.jpeg'),
+  ('bilt-obsidian', 'images/bilt-obsidian.jpeg'),
+  ('bilt-palladium', 'images/bilt-palladium.jpeg'),
+  ('boa-bankamericard', 'images/boa-bankamericard.jpeg'),
+  ('boa-customized-cash', 'images/boa-customized-cash.jpeg'),
+  ('boa-premium-rewards', 'images/boa-premium-rewards.jpeg'),
+  ('capitalone-venture-x', 'images/capitalone-venture-x.jpeg'),
+  ('chase-prime-visa', 'images/chase-prime-visa.jpeg'),
+  ('chase-sapphire-reserve', 'images/chase-sapphire-reserve.jpeg'),
+  ('chase-united-explorer', 'images/chase-united-explorer.jpeg'),
+  ('citi-aadvantage-executive', 'images/citi-aadvantage-executive.jpeg'),
+  ('citi-aadvantage-mileup', 'images/citi-aadvantage-mileup.jpeg'),
+  ('citi-aadvantage-platinum-select', 'images/citi-aadvantage-platinum-select.jpeg'),
+  ('citi-double-cash', 'images/citi-double-cash.jpeg'),
+  ('citi-simplicity', 'images/citi-simplicity.jpeg'),
+  ('citi-strata-elite', 'images/citi-strata-elite.jpeg'),
+  ('citi-strata-premier', 'images/citi-strata-premier.jpeg'),
+  ('citi-strata', 'images/citi-strata.jpeg'),
+  ('discover-it-cash-back', 'images/discover-it-cashback.jpeg'),
+  ('pnc-cash-rewards', 'images/pnc-cash-rewards.jpeg'),
+  ('pnc-spend-wise', 'images/pnc-spend-wise.jpeg'),
+  ('usbank-altitude-connect', 'images/usbank-altitude-connect.jpeg'),
+  ('usbank-altitude-go', 'images/usbank-altitude-go.png'),
+  ('wells-autograph-journey', 'images/wells-autograph-journey.jpeg'),
+  ('wells-autograph', 'images/wells-autograph.jpeg'),
+  ('wells-reflect', 'images/wells-reflect.jpeg'),
+  ('capitalone-quicksilverone', 'images/capitalone-quicksilverone.jpeg'),
+  ('capitalone-quicksilver', 'images/capitalone-quicksilver.jpeg'),
+  ('capitalone-spark-cash', 'images/capitalone-spark-cash.jpeg'),
+  ('capitalone-spark-miles', 'images/capital-one-spark-miles.jpeg'),
+  ('capitalone-ventureone', 'images/capitalone-ventureone.jpeg'),
+  ('capitalone-venture', 'images/capitalone-venture.jpeg'),
+  ('chase-freedom-flex', 'images/chase-freedom-flex.jpeg'),
+  ('chase-slate-edge', 'images/chase-slate-edge.jpeg'),
+  ('chase-slate', 'images/chase-slate.jpeg'),
+  ('chase-united-club', 'images/chase-united-club.jpeg'),
+  ('chase-united-gateway', 'images/chase-united-gateway.jpeg'),
+  ('chase-united-quest', 'images/chase-united-quest.jpeg'),
+  ('citi-costco-anywhere', 'images/citi-costco-anywhere.jpeg'),
+  ('citi-costco-business', 'images/citi-costco-business.jpeg'),
+  ('citi-diamond-preferred', 'images/citi-diamond-preferred.jpeg')
+) AS v (id, image_url)
+WHERE c.id = v.id;

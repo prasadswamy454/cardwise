@@ -27,7 +27,8 @@ DEFAULT_SCHEMA = "prod"
 TABLES = {
     "categories": ("id", "name", "icon"),
     "cards": ("id", "name", "issuer", "style", "unit", "base", "foreign_fee", "summary",
-              "cap", "cap_period", "activation", "default_wallet", "source_url", "reviewed_on", "limitations"),
+              "cap", "cap_period", "activation", "default_wallet", "source_url", "reviewed_on", "limitations",
+              "image_url"),
     "reward_rules": ("card_id", "category_ids", "channel", "rate", "capped", "description"),
 }
 ORDER_BY = {"categories": ("sort_order",), "cards": ("id",), "reward_rules": ("card_id", "category_ids", "channel")}
@@ -62,6 +63,7 @@ STYLES = {"jade", "midnight", "sand", "plum", "blue", "copper"}
 CHANNELS = {"in-person", "online", "portal"}
 PUBLIC_FILES = {"/", "/index.html", "/styles.css", "/app.js", "/rewards.js", "/tests.html", "/tests.js"}
 IDENTIFIER = re.compile(r"[a-z][a-z0-9-]*")
+CARD_IMAGE = re.compile(r"images/[a-z0-9][a-z0-9-]*\.(png|jpg|jpeg|webp)")
 
 
 class CatalogError(ValueError):
@@ -98,6 +100,7 @@ class Card(TypedDict):
     sourceUrl: NotRequired[str]
     reviewedOn: NotRequired[str]
     limitations: NotRequired[str]
+    imageUrl: NotRequired[str]
 
 
 class Catalog(TypedDict):
@@ -207,6 +210,10 @@ def build_catalog(tables: Tables) -> Catalog:
             card["capPeriod"] = row["cap_period"]
         elif row["cap_period"]:
             raise CatalogError(f"{card_id}: cap period requires a cap")
+        if row["image_url"]:
+            if not CARD_IMAGE.fullmatch(row["image_url"]):
+                raise CatalogError(f"{card_id}: image must be a png, jpg, or webp file in images/")
+            card["imageUrl"] = row["image_url"]
         cards[card_id] = card
         if boolean(row["default_wallet"], card_id + " default wallet"):
             default_wallet.append(card_id)
@@ -411,7 +418,7 @@ class CardwiseHandler(SimpleHTTPRequestHandler):
             self.send_json(200, catalog, head_only)
         elif path.startswith("/api/"):
             self.send_json(404, {"error": "API endpoint not found."}, head_only)
-        elif path in PUBLIC_FILES:
+        elif path in PUBLIC_FILES or CARD_IMAGE.fullmatch(path.removeprefix("/")):
             if head_only:
                 super().do_HEAD()
             else:

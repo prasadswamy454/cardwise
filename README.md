@@ -35,6 +35,21 @@ The browser sends coordinates to `POST /api/nearby-stores` in the request body, 
 
 Each result set comes from one service and shows its attribution. Store data is not saved; the browser only remembers that location is switched on. Store types are mapped to categories in `server.py`, and they are a best guess: issuers decide rewards from how the merchant is coded.
 
+## Card images
+
+Cards show a colored design by default. To use a real image instead:
+
+1. Run [db/002_card_image_url.sql](./db/002_card_image_url.sql) once as the table owner.
+2. Save the image in the `images/` folder, using a lowercase name with letters, digits, and hyphens, and a `png`, `jpg`, `jpeg`, or `webp` extension. Landscape card-shaped images (about 1.59:1) fill the card best.
+3. Point the card at the file, then refresh the browser:
+   ```sql
+   UPDATE prod.cards SET image_url = 'images/capitalone-savor.png' WHERE id = 'capitalone-savor';
+   ```
+
+Portrait images are shown whole on a plain background instead of being cropped. If a file is missing or can't load, the card falls back to its colored design. Only image files directly inside `images/` are served, and external image URLs are rejected.
+
+The `images/` folder is excluded from git because card designs and bank logos belong to their issuers. Get permission before publishing them.
+
 ## Database catalog and API
 
 The backend queries these tables on every `GET /api/catalog` request:
@@ -192,6 +207,7 @@ With the backend running, open <http://127.0.0.1:5173/tests.html>. The browser s
 - [rewards.js](./rewards.js): API loading, catalog/state validation, and deterministic calculation engine
 - [server.py](./server.py): PostgreSQL reads, catalog validation, JSON API, and static asset serving
 - [db/](./db/): one-time SQL changes to run against the database
+- `images/`: optional local card images, excluded from git
 - [requirements.txt](./requirements.txt): the PostgreSQL driver (`psycopg`)
 - [test_server.py](./test_server.py): catalog validation and HTTP API tests
 - [tests.js](./tests.js) and [tests.html](./tests.html): browser-executable tests

@@ -27,6 +27,7 @@ export function validCatalog(value) {
   if (categoryIds.size !== value.categories.length) return false;
   if (!value.cards.every(card => isRecord(card) && isId(card.id) &&
     isText(card.name) && isText(card.issuer) && isText(card.summary) && validSource(card) &&
+    (card.imageUrl === undefined || (typeof card.imageUrl === "string" && /^images\/[a-z0-9][a-z0-9-]*\.(png|jpg|jpeg|webp)$/.test(card.imageUrl))) &&
     ["jade", "midnight", "sand", "plum", "blue", "copper"].includes(card.style) &&
     ["cash", "points", "unmodeled"].includes(card.unit) && inRange(card.base, 1000) && inRange(card.foreignFee, 100) &&
     typeof card.activation === "boolean" &&

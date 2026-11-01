@@ -276,6 +276,20 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaises(psycopg.errors.UndefinedTable):
             fetch_tables(DEFAULT_DATABASE, "missing_schema")
 
+    def test_card_image_is_optional(self):
+        self.row("cards", id="citi-double-cash")["image_url"] = ""
+        self.assertNotIn("imageUrl", self.card("citi-double-cash"))
+        self.row("cards", id="citi-double-cash")["image_url"] = "images/citi-double-cash.png"
+        self.assertEqual(self.card("citi-double-cash")["imageUrl"], "images/citi-double-cash.png")
+
+    def test_unsafe_card_image_rejected(self):
+        for value in ("https://example.com/card.png", "images/../server.py", "/images/card.png", "images/card.svg",
+                      "images/card.png\"onerror=\"alert(1)", "card.png", "images/sub/card.png"):
+            with self.subTest(value=value):
+                self.row("cards", id="citi-double-cash")["image_url"] = value
+                with self.assertRaisesRegex(CatalogError, "image must be"):
+                    build_catalog(self.tables)
+
     def test_empty_catalog_rejected(self):
         self.tables["cards"] = []
         self.tables["reward_rules"] = []
@@ -507,6 +521,22 @@ class ApiTests(unittest.TestCase):
     def test_second_server_cannot_take_a_busy_port(self):
         with self.assertRaises(OSError):
             CardwiseServer(("127.0.0.1", self.server.server_port), CardwiseHandler).server_close()
+
+    def test_card_images_are_served(self):
+        folder = ROOT / "images"
+        folder.mkdir(exist_ok=True)
+        image = folder / "unit-test-card.png"
+        image.write_bytes(b"\x89PNG\r\n\x1a\n")
+        self.addCleanup(image.unlink)
+        status, headers, body = self.request("/images/unit-test-card.png")
+        self.assertEqual((status, headers["Content-type"], body), (200, "image/png", b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(self.request("/images/missing-card.png")[0], 404)
+
+    def test_only_card_images_are_public_from_the_images_folder(self):
+        for path in ("/images/", "/images/notes.txt", "/images/card.svg", "/images/../server.py",
+                     "/images/%2e%2e/server.py", "/images/sub/card.png", "/images/.hidden.png"):
+            with self.subTest(path=path):
+                self.assertEqual(self.request(path)[0], 404)
 
     def test_backend_sources_are_not_public(self):
         for path in ("/db/001_category_sort_order.sql", "/requirements.txt", "/server.py", "/test_server.py",

@@ -164,7 +164,7 @@ function renderWallet() {
   $("#wallet-cards").innerHTML = state.wallet.length ? state.wallet.map(id => {
     const card = cards.find(item => item.id === id);
     const setting = state.settings[id] ?? { spent: 0, activated: false };
-    return `<article class="wallet-card">${cardArt(card)}<div class="wallet-card-info"><h3>${escape(card.name)}${card.sourceUrl ? "" : " (Demo)"}</h3><p>${escape(card.summary)}</p>${cardTerms(card)}${card.cap ? `<label class="cap-label" for="spent-${id}">Bonus-category spend this ${card.capPeriod === "annual" ? "year" : "quarter"} ($)</label><input id="spent-${id}" class="spend-input" data-spent="${id}" type="number" min="0" max="1000000000" step="0.01" value="${setting.spent}" required><p class="input-help">Assumed $0 until you update it. Does not auto-reset.</p>` : ""}${card.activation ? `<label class="checkbox-label activation"><input data-activation="${id}" type="checkbox" ${setting.activated ? "checked" : ""}> Demo bonus activated</label>` : ""}</div></article>`;
+    return `<article class="wallet-card">${cardArt(card)}<div class="wallet-card-info"><h3>${escape(card.name)}${card.sourceUrl ? "" : " (Demo)"}</h3><p>${escape(card.summary)}</p>${cardTerms(card)}${card.cap ? `<label class="cap-label" for="spent-${id}">Bonus-category spend this ${card.capPeriod === "annual" ? "year" : "quarter"} ($)</label><input id="spent-${id}" class="spend-input" data-spent="${id}" type="number" min="0" max="1000000000" step="0.01" value="${setting.spent}" required><p class="input-help">Assumed $0 until you update it. Does not auto-reset.</p>` : ""}${card.activation ? `<label class="checkbox-label activation"><input data-activation="${id}" type="checkbox" ${setting.activated ? "checked" : ""}> Demo bonus activated</label>` : ""}<button type="button" class="text-button remove-card" data-remove="${id}" aria-label="Remove ${escape(card.name)} from wallet">Remove from wallet</button></div></article>`;
   }).join("") : `<div class="empty-wallet"><h3>A fresh start.</h3><p>Add a card to start comparing rewards.</p><button class="button secondary" id="add-first">Add your first card</button></div>`;
   $("#add-first")?.addEventListener("click", openWallet);
   renderCatalog();
@@ -266,6 +266,18 @@ $("#catalog-list").addEventListener("change", event => {
   renderWallet();
   compare();
   document.querySelector(`[data-card="${input.dataset.card}"]`)?.focus();
+});
+$("#wallet-cards").addEventListener("click", event => {
+  const id = event.target.closest("[data-remove]")?.dataset.remove;
+  if (!id) return;
+  const index = state.wallet.indexOf(id);
+  state.wallet = state.wallet.filter(cardId => cardId !== id);
+  save();
+  renderWallet();
+  compare();
+  // The clicked button is gone, so keep keyboard focus on the card that took its place.
+  const buttons = document.querySelectorAll("[data-remove]");
+  (buttons[Math.min(index, buttons.length - 1)] ?? $("#add-first")).focus();
 });
 $("#wallet-cards").addEventListener("input", event => {
   const input = event.target;

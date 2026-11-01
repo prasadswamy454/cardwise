@@ -898,6 +898,16 @@ label[for="amount"] {
 .wallet-card-info {
   padding:14px 3px 4px
 }
+.remove-card {
+  display:block;
+  margin-top:8px;
+  padding:6px 0;
+  cursor:pointer
+}
+.remove-card:hover {
+  color:#a2412f;
+  text-decoration:underline
+}
 .wallet-card-info h3 {
   font-size:11px;
   font-weight:550;

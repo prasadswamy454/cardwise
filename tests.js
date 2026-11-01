@@ -1,4 +1,4 @@
-import { cards, categories, defaultState, validState, validCatalog, rankCards } from "./rewards.js";
+import { cards, categories, defaultState, validState, validCatalog, validStores, chooseStore, rankCards } from "./rewards.js";
 
 export function runTests() {
   const results = [];
@@ -16,6 +16,27 @@ export function runTests() {
     try { fn(); } catch { threw = true; }
     equal(threw, true);
   }
+  test("Nearest store is chosen only for a precise location", () => {
+    const stores = [{ name: "Near", category: "groceries", distance: 10 }, { name: "Far", category: "dining", distance: 90 }];
+    equal(chooseStore(stores, 30), stores[0]);
+    equal(chooseStore(stores, 101), null);
+    equal(chooseStore([], 10), null);
+  });
+  test("Nearby stores in another category prevent an automatic pick", () => {
+    const stores = [{ name: "Near", category: "shopping", distance: 7 }, { name: "Same", category: "shopping", distance: 11 },
+      { name: "Other", category: "travel", distance: 13 }];
+    equal(chooseStore(stores, 30), null);
+    equal(chooseStore(stores, 12), stores[0]);
+    equal(chooseStore(stores.slice(0, 2), 30), stores[0]);
+  });
+  test("Malformed store responses rejected", () => {
+    const store = { name: "Near", category: "groceries", distance: 10 };
+    equal(validStores({ stores: [store], source: "google" }), true);
+    equal(validStores({ stores: [], source: "openstreetmap" }), true);
+    [null, {}, { stores: [store] }, { stores: [store], source: "other" }, { stores: "none", source: "google" },
+      { stores: [{ ...store, name: "" }], source: "google" }, { stores: [{ ...store, category: "unknown" }], source: "google" },
+      { stores: [{ ...store, distance: -1 }], source: "google" }].forEach(value => equal(validStores(value), false));
+  });
   test("Default wallet is valid", () => equal(validState(defaultState()), true));
   test("Loaded API catalog is valid", () => equal(validCatalog({ cards, categories, defaultWallet: defaultState().wallet }), true));
   test("Malformed API catalogs rejected", () => {

@@ -58,6 +58,30 @@ export async function loadCatalog() {
   defaultWallet = catalog.defaultWallet;
 }
 
+export function validStores(value) {
+  return isRecord(value) && ["google", "openstreetmap"].includes(value.source) && Array.isArray(value.stores) &&
+    value.stores.every(store => isRecord(store) && isText(store.name) && inRange(store.distance, 1e7) &&
+      categories.some(category => category.id === store.category));
+}
+
+export async function findNearbyStores(latitude, longitude, radius) {
+  const response = await fetch("/api/nearby-stores", { method: "POST", cache: "no-store",
+    headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(35000),
+    body: JSON.stringify({ latitude, longitude, radius }) });
+  if (!response.ok) throw new Error(`Store lookup failed (HTTP ${response.status}).`);
+  const results = await response.json();
+  if (!validStores(results)) throw new Error("The server returned invalid store data.");
+  return results;
+}
+
+// Only pick automatically when the position is precise and every store it could be shares a category,
+// because a different category could change the recommended card. Otherwise the person chooses from the list.
+export function chooseStore(stores, accuracy) {
+  if (accuracy > 100 || !stores.length) return null;
+  const reach = Math.max(accuracy, stores[0].distance);
+  return stores.every(store => store.distance > reach || store.category === stores[0].category) ? stores[0] : null;
+}
+
 export function defaultState() {
   return { version: 1, wallet: [...defaultWallet], settings: {}, pointValue: 1 };
 }

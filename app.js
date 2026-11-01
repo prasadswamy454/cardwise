@@ -1,11 +1,16 @@
-import { cards, categories, defaultState, validState, rankCards, loadCatalog } from "./rewards.js";
+import { cards, categories, defaultState, validState, rankCards, loadCatalog, findNearbyStores, chooseStore } from "./rewards.js";
 
 const $ = selector => document.querySelector(selector);
 const money = value => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
 const escape = value => String(value).replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 const storageKey = "cardwise.wallet.v1";
+// Remembers only that location is switched on, never a position or store.
+const locationKey = "cardwise.location.v1";
+const defaultStoreStatus = "Your location is sent through this app’s server to Google Maps or OpenStreetMap to find nearby stores. It isn’t saved.";
 let state;
 let catalogReady = false;
+let nearbyStores = [];
+let activeStore = null;
 
 function notice(message) {
   $("#storage-notice").textContent = message;
@@ -33,6 +38,103 @@ function save() {
   } catch (error) {
     console.error("Could not save Cardwise wallet:", error);
     notice("Your changes work for this session, but could not be saved. Check your browser storage permissions.");
+  }
+}
+
+function locationEnabled() {
+  try {
+    return localStorage.getItem(locationKey) === "on";
+  } catch {
+    return false;
+  }
+}
+
+function setLocationEnabled(enabled) {
+  try {
+    if (enabled) localStorage.setItem(locationKey, "on");
+    else localStorage.removeItem(locationKey);
+  } catch (error) {
+    console.error("Could not save the location setting:", error);
+  }
+  $("#location-off").hidden = !enabled;
+}
+
+function distanceLabel(meters) {
+  const feet = Math.round(meters * 3.28084);
+  return feet < 1000 ? `${feet} ft` : `${(meters / 1609.344).toFixed(1)} mi`;
+}
+
+function selectStore(store) {
+  activeStore = store;
+  document.querySelector(`[name="category"][value="${store.category}"]`).checked = true;
+  $("#channel").value = "in-person";
+}
+
+function renderStores(source) {
+  $("#store-list").hidden = !nearbyStores.length;
+  $("#store-list").innerHTML = nearbyStores.map((store, index) => `<label class="store-option"><input type="radio" name="store" value="${index}" ${store === activeStore ? "checked" : ""}><span><strong>${escape(store.name)}</strong><small>${escape(categories.find(category => category.id === store.category).name)} · ${distanceLabel(store.distance)}</small></span></label>`).join("");
+  $("#store-source").hidden = !source;
+  $("#store-source").textContent = source === "google" ? "Store data: Google Maps" : source ? "Store data: © OpenStreetMap contributors" : "";
+}
+
+function clearStores() {
+  nearbyStores = [];
+  activeStore = null;
+  renderStores(null);
+  $("#store-status").textContent = defaultStoreStatus;
+}
+
+function currentPosition() {
+  return new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject,
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }));
+}
+
+async function locate() {
+  if (!navigator.geolocation) {
+    $("#store-status").textContent = "This browser can’t share your location. Choose a category instead.";
+    return;
+  }
+  $("#locate-button").disabled = true;
+  $("#store-status").textContent = "Finding stores near you…";
+  try {
+    const { coords } = await currentPosition();
+    setLocationEnabled(true);
+    const radius = Math.round(Math.min(1000, Math.max(100, coords.accuracy)));
+    const { stores, source } = await findNearbyStores(coords.latitude, coords.longitude, radius);
+    nearbyStores = stores;
+    activeStore = null;
+    const nearest = chooseStore(stores, coords.accuracy);
+    if (nearest) selectStore(nearest);
+    renderStores(source);
+    $("#store-status").textContent = !stores.length ? "No stores found near you. Choose a category instead."
+      : nearest ? `Looks like you’re at ${nearest.name}. Not right? Pick another store or category.`
+      : coords.accuracy > 100 ? "Your location is approximate, so choose your store from this list."
+      : "Several stores are close together, so choose yours from this list.";
+    compare();
+  } catch (error) {
+    // Position errors carry a code. Don't log them with coordinates or remember a denied permission.
+    if (error.code === 1) {
+      setLocationEnabled(false);
+      clearStores();
+      compare();
+    } else console.error("Could not find nearby stores:", error.message);
+    $("#store-status").textContent = error.code === 1 ? "Location permission is off. Allow it in your browser settings, or choose a category."
+      : error.code ? "Your location isn’t available right now. Try again, or choose a category."
+      : "Nearby stores couldn’t be loaded. Try again, or choose a category.";
+  } finally {
+    $("#locate-button").disabled = false;
+  }
+}
+
+// Browsers require the first request to come from the person; after that, look up stores on each visit.
+async function locateIfAllowed() {
+  if (!locationEnabled()) return;
+  $("#location-off").hidden = false;
+  try {
+    const permission = await navigator.permissions.query({ name: "geolocation" });
+    if (permission.state === "granted") locate();
+  } catch (error) {
+    console.error("Could not check location permission:", error);
   }
 }
 
@@ -97,12 +199,13 @@ function compare() {
   const tied = ranked.filter(result => result.netCents === best.netCents);
   const next = ranked[1];
   const category = categories.find(item => item.id === purchase.category);
+  const store = activeStore?.category === purchase.category ? activeStore : null;
   const allNegative = best.netCents < 0;
   const headline = allNegative ? "Lowest estimated cost" : tied.length > 1 ? `${tied.length} cards, equally rewarding` : "Meet your best card.";
   $("#results").innerHTML = `
     ${excludedNotice}
     <article class="winner">
-      <div class="winner-top"><span class="winner-tag"><span aria-hidden="true">✦</span> ${allNegative ? "LOWEST NET LOSS" : tied.length > 1 ? "TIED FOR BEST" : "YOUR TOP PICK"}</span><span>${escape(category.name)} · ${money(purchase.amount)}</span></div>
+      <div class="winner-top"><span class="winner-tag"><span aria-hidden="true">✦</span> ${allNegative ? "LOWEST NET LOSS" : tied.length > 1 ? "TIED FOR BEST" : "YOUR TOP PICK"}</span><span>${store ? `${escape(store.name)} · ` : ""}${escape(category.name)} · ${money(purchase.amount)}</span></div>
       <h2 id="results-heading">${headline}</h2>
       ${best.card.sourceUrl ? `<p class="reference-note">${best.card.reviewedOn ? "Reference estimate; rewards and fees are subject to change." : "Unverified reference rates; confirm current issuer terms."} Some benefits and bonuses are excluded.</p>` : `<p class="reference-note">Fictional example card, not a real issuer offer.</p>`}
       <div class="winner-body"><div class="winner-card-name"><p>${escape(best.card.issuer)}</p><h3>${escape(best.card.name)}</h3><span>${escape(best.explanation)}</span></div><div class="reward-total"><span>${money(best.net)}</span><p>estimated net rewards</p></div></div>
@@ -111,13 +214,31 @@ function compare() {
     </article>
     <div class="comparison-header"><h3>The full picture</h3><span>${ranked.length} card${ranked.length === 1 ? "" : "s"} compared</span></div>
     <div class="comparison-list">${ranked.map((result, index) => `<div class="comparison-row"><span class="rank">${String(index + 1).padStart(2, "0")}</span><span class="tiny-card ${result.card.style}" aria-hidden="true"></span><div class="comparison-name"><strong>${escape(result.card.name)}</strong><span>${result.effectiveRate.toFixed(2)}% value${result.fee ? ` · ${money(result.fee)} fee` : ""}</span></div><strong class="comparison-value">${money(result.net)}${result.netCents === best.netCents ? `<span class="best-label">${tied.length > 1 ? "TIED BEST" : "BEST"}</span>` : ""}</strong></div>`).join("")}</div>
-    <details class="assumptions"><summary>Behind the numbers <span aria-hidden="true">＋</span></summary><p>Category eligibility is assumed. Superstores and warehouse clubs may not qualify as supermarkets. Check each issuer’s terms.</p>${ranked.map(result => `<div><strong>${escape(result.card.name)}</strong><p>${escape(result.explanation)}. Gross rewards: ${money(result.gross)}; fees: ${money(result.fee)}.</p>${result.notes.length ? `<ul>${result.notes.map(note => `<li>${escape(note)}</li>`).join("")}</ul>` : ""}</div>`).join("")}<p>Annual fees, interest, welcome offers, and price differences between booking channels are not included. Demo rules are not current issuer offers.</p></details>`;
+    <details class="assumptions"><summary>Behind the numbers <span aria-hidden="true">＋</span></summary><p>${store ? `${escape(store.name)} is treated as ${escape(category.name)} based on its map listing. Your issuer may code it differently. ` : ""}Category eligibility is assumed. Superstores and warehouse clubs may not qualify as supermarkets. Check each issuer’s terms.</p>${ranked.map(result => `<div><strong>${escape(result.card.name)}</strong><p>${escape(result.explanation)}. Gross rewards: ${money(result.gross)}; fees: ${money(result.fee)}.</p>${result.notes.length ? `<ul>${result.notes.map(note => `<li>${escape(note)}</li>`).join("")}</ul>` : ""}</div>`).join("")}<p>Annual fees, interest, welcome offers, and price differences between booking channels are not included. Demo rules are not current issuer offers.</p></details>`;
 }
 
 function openWallet() {
   $("#wallet-dialog").showModal();
 }
 
+$("#locate-button").addEventListener("click", locate);
+$("#location-off").addEventListener("click", () => {
+  setLocationEnabled(false);
+  clearStores();
+  compare();
+});
+$("#store-list").addEventListener("change", event => {
+  const store = nearbyStores[Number(event.target.value)];
+  if (!store) return;
+  selectStore(store);
+  $("#store-status").textContent = `Using ${store.name}. Not right? Pick another store or category.`;
+});
+$("#categories").addEventListener("change", event => {
+  if (!activeStore || activeStore.category === event.target.value) return;
+  activeStore = null;
+  document.querySelector('[name="store"]:checked').checked = false;
+  $("#store-status").textContent = "Using the category you chose instead of a store.";
+});
 $("#purchase-form").addEventListener("submit", event => { event.preventDefault(); compare(); });
 $("#purchase-form").addEventListener("input", compare);
 $("#purchase-form").addEventListener("change", compare);
@@ -162,6 +283,8 @@ $("#reset-button").addEventListener("click", () => {
   state = defaultState();
   $("#purchase-form").reset();
   $("#point-value").value = state.pointValue;
+  setLocationEnabled(false);
+  clearStores();
   save();
   renderWallet();
   compare();
@@ -190,6 +313,7 @@ async function initialize() {
   for (const selector of ["#manage-top", "#manage-wallet", "#reset-button"]) $(selector).disabled = false;
   renderWallet();
   compare();
+  locateIfAllowed();
 }
 
 $("#retry-catalog").addEventListener("click", initialize);

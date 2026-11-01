@@ -1,6 +1,6 @@
 # Cardwise
 
-A responsive credit-card rewards MVP. Native HTML, CSS, and JavaScript frontend with a Python backend and a PostgreSQL-backed catalog. No build step, bank linking, or external services.
+A responsive credit-card rewards MVP. Native HTML, CSS, and JavaScript frontend with a Python backend and a PostgreSQL-backed catalog. No build step or bank linking. The only external services are the optional store lookups described in [Find the store you're at](#find-the-store-youre-at).
 
 ## Run
 
@@ -21,6 +21,19 @@ By default the server connects with `host=localhost port=5432 dbname=cardwise us
 Never put the password in source or the connection string. Store it in a [pgpass file](https://www.postgresql.org/docs/current/libpq-pgpass.html) (`%APPDATA%\postgresql\pgpass.conf` on Windows, `~/.pgpass` elsewhere) as `localhost:5432:cardwise:cardwise_app:<password>`. The `cardwise_app` role only needs `CONNECT` on the database, `USAGE` on `prod`, and `SELECT` on its tables; the server opens read-only transactions.
 
 One-time schema change: run [db/001_category_sort_order.sql](./db/001_category_sort_order.sql) as the table owner (for example `postgres` in pgAdmin). It adds `prod.categories.sort_order`, which sets the category display order; the first category is preselected.
+
+## Find the store you're at
+
+**Find the store I'm at** uses the browser's location to list nearby stores. When the location is within 100 m and every store it could be shares a category, the nearest store is selected and the app recommends a card for that category. With a less precise location, such as on many desktop computers, or where stores in different categories are close together, such as in a mall, you choose from the list. Browsers only share location on HTTPS or `localhost`, and the first request must come from a click. After that the lookup runs on each page load until you choose **Stop using my location** or reset the demo.
+
+The browser sends coordinates to `POST /api/nearby-stores` in the request body, so they stay out of URLs and logs. The server sends them to one lookup service:
+
+1. **Google Places API (New)**, when `CARDWISE_GOOGLE_PLACES_KEY` is set. Store the key in that environment variable, never in source. Only name, location, and type fields are requested, which keeps lookups on the Nearby Search Pro SKU.
+2. **OpenStreetMap** through the public Overpass API, when no key is set or Google refuses or fails. Set `CARDWISE_OVERPASS_URL` to use a different Overpass server.
+
+**Keeping Google free:** set the Places API (New) Nearby Search per-day quota to **161** in the Google Cloud console (the 5,000 free monthly Pro lookups divided by 31). Google refuses further requests that day, and the server then uses OpenStreetMap. Budget alerts only notify you; the quota is what limits charges. Check [current pricing](https://developers.google.com/maps/billing-and-pricing/pricing), as free allowances can change.
+
+Each result set comes from one service and shows its attribution. Store data is not saved; the browser only remembers that location is switched on. Store types are mapped to categories in `server.py`, and they are a best guess: issuers decide rewards from how the merchant is coded.
 
 ## Database catalog and API
 
@@ -115,7 +128,7 @@ Chase-specific exclusions are visible per card: Freedom Flex rotating categories
 
 Point values are user estimates, not guaranteed cash redemption values. One shared cents-per-point input applies to every points card; it is not a card-specific redemption quote. Annual fees, interest, welcome bonuses, targeted offers, statement credits, redemption constraints, and booking-price differences are excluded. Compare only purchases you would otherwise make; rewards do not offset the costs of carrying debt.
 
-Card details come from the backend PostgreSQL catalog; reward calculations still run in the browser. There is no account sync, bank connection, analytics, or live issuer-data feed. Wallet selections, point valuation, and manually tracked spending stay in the current browser profile and are not sent to the backend or encrypted. Do not enter sensitive card information.
+Card details come from the backend PostgreSQL catalog; reward calculations still run in the browser. There is no account sync, bank connection, analytics, or live issuer-data feed. If you use the store finder, your coordinates go to Google Maps or OpenStreetMap through this server for each lookup, under those services' own terms. Wallet selections, point valuation, and manually tracked spending stay in the current browser profile and are not sent to the backend or encrypted. Do not enter sensitive card information.
 
 ### Discover Catalog
 

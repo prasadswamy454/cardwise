@@ -44,6 +44,7 @@
             <p class="section-description">A few details. Your best card, in seconds.</p>
             <form id="purchase-form">
               <fieldset id="purchase-controls" disabled>
+              <div class="store-finder"><div class="store-finder-actions"><button type="button" class="button secondary" id="locate-button"><span aria-hidden="true">⌖</span> Find the store I’m at</button><button type="button" class="text-button" id="location-off" hidden>Stop using my location</button></div><p class="input-help" id="store-status" role="status">Your location is sent through this app’s server to Google Maps or OpenStreetMap to find nearby stores. It isn’t saved.</p><div class="store-list" id="store-list" role="radiogroup" aria-label="Nearby stores" hidden></div><p class="input-help" id="store-source" hidden></p></div>
               <fieldset><legend>Spending category</legend><div class="category-grid" id="categories"></div></fieldset>
               <label for="amount">Purchase amount <span class="field-hint">USD</span></label>
               <div class="amount-input"><span aria-hidden="true">$</span><input id="amount" name="amount" type="number" value="250" min="0.01" max="1000000000" step="0.01" required inputmode="decimal" aria-describedby="input-error"></div>
@@ -78,7 +79,7 @@
     </dialog>
     <dialog id="how-dialog" aria-labelledby="how-heading">
       <div class="dialog-heading"><h2 id="how-heading">Good rewards start with clear rules.</h2><button class="icon-button" id="close-how" aria-label="Close explanation">×</button></div>
-      <ol class="how-list"><li><strong>Choose your cards.</strong> Real-card entries link to issuer terms and disclose excluded rewards. Fictional examples are marked Demo. No account or sensitive information required.</li><li><strong>Describe the purchase.</strong> Select the merchant’s actual rewards category, amount, and payment channel. Merchant names alone do not guarantee eligibility.</li><li><strong>Compare net value.</strong> We apply modeled rates, remaining caps, activation, your point valuation, and foreign fees. Ties are shown as equal-value choices.</li></ol>
+      <ol class="how-list"><li><strong>Choose your cards.</strong> Real-card entries link to issuer terms and disclose excluded rewards. Fictional examples are marked Demo. No account or sensitive information required.</li><li><strong>Describe the purchase.</strong> Find the store you’re at, or select the merchant’s actual rewards category, then set the amount and payment channel. Store types are a best guess: issuers decide the category from how the merchant is coded, so merchant names alone do not guarantee eligibility.</li><li><strong>Compare net value.</strong> We apply modeled rates, remaining caps, activation, your point valuation, and foreign fees. Ties are shown as equal-value choices.</li></ol>
       <p class="notice">Cap spending is manually tracked, not synced, and does not auto-reset. These reference estimates are not financial advice or a complete issuer-benefit comparison. Unverified entries require checking current issuer terms. Housing rewards, relationship boosts and some portal bonuses are excluded.</p>
     </dialog>
   </body>

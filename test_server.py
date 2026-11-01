@@ -2,13 +2,18 @@ import copy
 import json
 import threading
 import unittest
+import urllib.error
 from functools import partial
 from http.client import HTTPConnection
+from io import BytesIO
+from unittest import mock
 
 import psycopg
 
-from server import (DEFAULT_DATABASE, DEFAULT_SCHEMA, ROOT, CardwiseHandler, CardwiseServer, CatalogError,
-                    build_catalog, fetch_tables, text)
+from server import (AMENITY_CATEGORIES, DEFAULT_DATABASE, DEFAULT_SCHEMA, GOOGLE_CATEGORIES, GOOGLE_FIELD_MASK,
+                    GOOGLE_PLACES_URL, ROOT, SHOP_CATEGORIES, SHOP_DEFAULT_CATEGORY, TOURISM_CATEGORIES,
+                    CardwiseHandler, CardwiseServer, CatalogError, StoreLookupError, StoreResults, build_catalog,
+                    fetch_tables, nearby_stores, parse_google, parse_overpass, text)
 
 
 def database_tables():
@@ -278,11 +283,111 @@ class CatalogTests(unittest.TestCase):
             build_catalog(self.tables)
 
 
+GOOGLE_PAYLOAD = {"places": [
+    {"displayName": {"text": "Far Market"}, "primaryType": "supermarket", "types": ["supermarket", "store"],
+     "location": {"latitude": 40.002, "longitude": -74}},
+    {"displayName": {"text": "Near Cafe"}, "primaryType": "coffee_shop", "types": ["coffee_shop", "cafe"],
+     "location": {"latitude": 40.0001, "longitude": -74}},
+    {"displayName": {"text": "Fuel Stop"}, "primaryType": "unlisted_type", "types": ["gas_station", "convenience_store"],
+     "location": {"latitude": 40.001, "longitude": -74}},
+    {"displayName": {"text": "Unknown"}, "primaryType": "park", "types": ["park"],
+     "location": {"latitude": 40, "longitude": -74}},
+    {"displayName": {"text": "No Location"}, "primaryType": "cafe", "types": ["cafe"]},
+]}
+OVERPASS_PAYLOAD = {"elements": [
+    {"tags": {"name": "Corner Grocer", "shop": "supermarket"}, "lat": 40.001, "lon": -74},
+    {"tags": {"name": "Corner Grocer", "shop": "supermarket"}, "lat": 40.0002, "lon": -74},
+    {"tags": {"name": "Big Mall Shop", "shop": "clothes"}, "center": {"lat": 40.002, "lon": -74}},
+    {"tags": {"name": "Inn", "tourism": "hotel"}, "lat": 40.003, "lon": -74},
+    {"tags": {"name": "Unnamed tag only", "leisure": "park"}, "lat": 40, "lon": -74},
+    {"tags": {"shop": "supermarket"}, "lat": 40, "lon": -74},
+]}
+
+
+def json_response(payload):
+    return mock.MagicMock(__enter__=lambda self: BytesIO(json.dumps(payload).encode("utf-8")),
+                          __exit__=lambda self, *args: False)
+
+
+class StoreTests(unittest.TestCase):
+    def test_every_mapped_category_exists_in_the_catalog(self):
+        catalog_ids = {row["id"] for row in database_tables()["categories"]}
+        mapped = {*AMENITY_CATEGORIES.values(), *TOURISM_CATEGORIES.values(), *SHOP_CATEGORIES.values(),
+                  *GOOGLE_CATEGORIES.values(), SHOP_DEFAULT_CATEGORY}
+        self.assertLessEqual(mapped, catalog_ids)
+
+    def test_google_results_are_categorized_and_sorted_by_distance(self):
+        stores = parse_google(GOOGLE_PAYLOAD, 40, -74)
+        self.assertEqual([(store["name"], store["category"]) for store in stores],
+                         [("Near Cafe", "dining"), ("Fuel Stop", "gas"), ("Far Market", "groceries")])
+        self.assertAlmostEqual(stores[0]["distance"], 11, delta=1)
+
+    def test_google_empty_response_has_no_stores(self):
+        self.assertEqual(parse_google({}, 40, -74), [])
+
+    def test_overpass_results_keep_the_closest_of_each_store(self):
+        stores = parse_overpass(OVERPASS_PAYLOAD, 40, -74)
+        self.assertEqual([(store["name"], store["category"]) for store in stores],
+                         [("Corner Grocer", "groceries"), ("Big Mall Shop", "shopping"), ("Inn", "travel")])
+        self.assertAlmostEqual(stores[0]["distance"], 22, delta=1)
+
+    def test_google_is_used_first_with_the_pro_field_mask(self):
+        with mock.patch.dict("os.environ", {"CARDWISE_GOOGLE_PLACES_KEY": "test-key"}), \
+                mock.patch("server.urllib.request.urlopen", return_value=json_response(GOOGLE_PAYLOAD)) as urlopen:
+            results = nearby_stores(40, -74, 100)
+        self.assertEqual(results["source"], "google")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(urlopen.call_count, 1)
+        self.assertEqual(request.full_url, GOOGLE_PLACES_URL)
+        self.assertEqual(request.get_header("X-goog-api-key"), "test-key")
+        self.assertEqual(request.get_header("X-goog-fieldmask"), GOOGLE_FIELD_MASK)
+        body = json.loads(request.data)
+        self.assertEqual(body["rankPreference"], "DISTANCE")
+        self.assertLessEqual(len(body["includedTypes"]), 50)
+        self.assertEqual(body["locationRestriction"]["circle"]["radius"], 100)
+
+    def test_quota_refusal_falls_back_to_openstreetmap(self):
+        quota = urllib.error.HTTPError(GOOGLE_PLACES_URL, 429, "Too Many Requests", None, None)
+        with mock.patch.dict("os.environ", {"CARDWISE_GOOGLE_PLACES_KEY": "test-key"}), \
+                mock.patch("server.urllib.request.urlopen", side_effect=[quota, json_response(OVERPASS_PAYLOAD)]), \
+                self.assertLogs(level="WARNING") as logged:
+            results = nearby_stores(40, -74, 100)
+        self.assertEqual(results["source"], "openstreetmap")
+        self.assertEqual(results["stores"][0]["name"], "Corner Grocer")
+        self.assertIn("HTTP 429", logged.output[0])
+        self.assertNotIn("test-key", logged.output[0])
+
+    def test_without_a_key_only_openstreetmap_is_called(self):
+        with mock.patch.dict("os.environ", {"CARDWISE_GOOGLE_PLACES_KEY": ""}), \
+                mock.patch("server.urllib.request.urlopen", return_value=json_response(OVERPASS_PAYLOAD)) as urlopen:
+            results = nearby_stores(40, -74, 100)
+        self.assertEqual(results["source"], "openstreetmap")
+        self.assertEqual(urlopen.call_count, 1)
+        self.assertNotIn("googleapis", urlopen.call_args.args[0].full_url)
+
+    def test_both_services_failing_raises_without_coordinates(self):
+        with mock.patch.dict("os.environ", {"CARDWISE_GOOGLE_PLACES_KEY": "test-key"}), \
+                mock.patch("server.urllib.request.urlopen", side_effect=OSError("40.712800 refused")), \
+                self.assertLogs(level="WARNING") as logged, \
+                self.assertRaises(StoreLookupError) as raised:
+            nearby_stores(40.7128, -74, 100)
+        self.assertNotIn("40.7128", str(raised.exception))
+        self.assertNotIn("40.7128", logged.output[0])
+
+    def test_malformed_response_is_a_lookup_failure(self):
+        with mock.patch.dict("os.environ", {"CARDWISE_GOOGLE_PLACES_KEY": ""}), \
+                mock.patch("server.urllib.request.urlopen", return_value=json_response({"unexpected": True})), \
+                self.assertRaises(StoreLookupError):
+            nearby_stores(40, -74, 100)
+
+
 class ApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.source = database_tables()
-        handler = partial(CardwiseHandler, directory=str(ROOT), load=lambda: cls.load())
+        cls.find_stores = staticmethod(lambda latitude, longitude, radius: StoreResults(stores=[], source="google"))
+        handler = partial(CardwiseHandler, directory=str(ROOT), load=lambda: cls.load(),
+                          find_stores=lambda *args: cls.find_stores(*args))
         cls.server = CardwiseServer(("127.0.0.1", 0), handler)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -353,6 +458,51 @@ class ApiTests(unittest.TestCase):
         status, _, body = self.request("/")
         self.assertEqual(status, 200)
         self.assertIn(b"Cardwise", body)
+
+    def post_stores(self, body, content_type="application/json"):
+        self.connection.request("POST", "/api/nearby-stores", body=body, headers={"Content-Type": content_type})
+        response = self.connection.getresponse()
+        return response.status, json.loads(response.read())
+
+    def test_nearby_stores_returns_results_and_source(self):
+        store = {"name": "Corner Grocer", "category": "groceries", "distance": 20}
+        calls = []
+        def find(latitude, longitude, radius):
+            calls.append((latitude, longitude, radius))
+            return StoreResults(stores=[store], source="openstreetmap")
+        with mock.patch.object(type(self), "find_stores", staticmethod(find)):
+            status, body = self.post_stores(json.dumps({"latitude": 40.5, "longitude": -74, "radius": 100}))
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"stores": [store], "source": "openstreetmap"})
+        self.assertEqual(calls, [(40.5, -74, 100)])
+
+    def test_nearby_stores_rejects_invalid_input(self):
+        valid = {"latitude": 40, "longitude": -74, "radius": 100}
+        for change in ({"latitude": 91}, {"longitude": -181}, {"radius": 49}, {"radius": 1001}, {"latitude": "40"},
+                       {"longitude": True}, {"radius": None}, {"latitude": float("nan")}):
+            with self.subTest(change=change):
+                self.assertEqual(self.post_stores(json.dumps({**valid, **change}))[0], 400)
+        self.assertEqual(self.post_stores("not json")[0], 400)
+        self.assertEqual(self.post_stores("[]")[0], 400)
+        self.assertEqual(self.post_stores("x" * 2000)[0], 400)
+
+    def test_nearby_stores_requires_json_content_type(self):
+        self.assertEqual(self.post_stores("{}", "text/plain")[0], 415)
+
+    def test_nearby_stores_failure_returns_json_error_and_logs_no_coordinates(self):
+        def fail(*args):
+            raise StoreLookupError("HTTP 500")
+        with mock.patch.object(type(self), "find_stores", staticmethod(fail)), self.assertLogs(level="ERROR") as logged:
+            status, body = self.post_stores(json.dumps({"latitude": 40.7128, "longitude": -74, "radius": 100}))
+        self.assertEqual(status, 502)
+        self.assertIn("error", body)
+        self.assertNotIn("40.7128", "".join(logged.output))
+
+    def test_post_to_other_paths_returns_json_404(self):
+        self.connection.request("POST", "/api/catalog", body="{}", headers={"Content-Type": "application/json"})
+        response = self.connection.getresponse()
+        self.assertEqual(response.status, 404)
+        self.assertIn("error", json.loads(response.read()))
 
     def test_second_server_cannot_take_a_busy_port(self):
         with self.assertRaises(OSError):

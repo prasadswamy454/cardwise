@@ -6,12 +6,15 @@ import logging
 import math
 import os
 import re
-from collections.abc import Callable
+import urllib.error
+import urllib.request
+from collections.abc import Callable, Iterable
 from functools import partial
+from http.client import HTTPException
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import NotRequired, TypedDict
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import psycopg
 from psycopg import sql
@@ -28,6 +31,33 @@ TABLES = {
     "reward_rules": ("card_id", "category_ids", "channel", "rate", "capped", "description"),
 }
 ORDER_BY = {"categories": ("sort_order",), "cards": ("id",), "reward_rules": ("card_id", "category_ids", "channel")}
+OVERPASS_URL = os.environ.get("CARDWISE_OVERPASS_URL", "https://overpass-api.de/api/interpreter")
+MAX_STORES = 10
+MAX_BODY_BYTES = 1024
+# OpenStreetMap tags mapped to catalog category IDs. Issuers decide the real category from merchant codes.
+AMENITY_CATEGORIES = {"restaurant": "dining", "fast_food": "dining", "cafe": "dining", "bar": "dining", "pub": "dining",
+                      "food_court": "dining", "ice_cream": "dining", "fuel": "gas", "charging_station": "ev",
+                      "car_rental": "travel", "pharmacy": "other"}
+TOURISM_CATEGORIES = {"hotel": "travel", "motel": "travel", "hostel": "travel", "guest_house": "travel"}
+SHOP_CATEGORIES = {"supermarket": "groceries", "grocery": "groceries", "greengrocer": "groceries",
+                   "bakery": "dining", "convenience": "other", "chemist": "other"}
+SHOP_DEFAULT_CATEGORY = "shopping"
+GOOGLE_PLACES_URL = "https://places.googleapis.com/v1/places:searchNearby"
+# These four fields keep each lookup on the Nearby Search Pro SKU; adding others can raise the price.
+GOOGLE_FIELD_MASK = "places.displayName,places.location,places.primaryType,places.types"
+GOOGLE_CATEGORIES = {
+    "supermarket": "groceries", "grocery_store": "groceries",
+    "restaurant": "dining", "fast_food_restaurant": "dining", "cafe": "dining", "coffee_shop": "dining",
+    "bar": "dining", "pub": "dining", "bakery": "dining", "ice_cream_shop": "dining",
+    "gas_station": "gas", "electric_vehicle_charging_station": "ev",
+    "hotel": "travel", "motel": "travel", "lodging": "travel", "hostel": "travel", "car_rental": "travel",
+    "shopping_mall": "shopping", "department_store": "shopping", "clothing_store": "shopping",
+    "electronics_store": "shopping", "home_goods_store": "shopping", "hardware_store": "shopping",
+    "furniture_store": "shopping", "shoe_store": "shopping", "book_store": "shopping",
+    "sporting_goods_store": "shopping", "jewelry_store": "shopping", "warehouse_store": "shopping",
+    "discount_store": "shopping", "pet_store": "shopping", "store": "shopping",
+    "convenience_store": "other", "pharmacy": "other", "drugstore": "other",
+}
 STYLES = {"jade", "midnight", "sand", "plum", "blue", "copper"}
 CHANNELS = {"in-person", "online", "portal"}
 PUBLIC_FILES = {"/", "/index.html", "/styles.css", "/app.js", "/rewards.js", "/tests.html", "/tests.js"}
@@ -224,14 +254,135 @@ def load_catalog(database: str = DEFAULT_DATABASE, schema: str = DEFAULT_SCHEMA)
     return build_catalog(fetch_tables(database, schema))
 
 
+class StoreLookupError(RuntimeError):
+    """The nearby-store service could not answer."""
+
+
+class Store(TypedDict):
+    name: str
+    category: str
+    distance: int
+
+
+class StoreResults(TypedDict):
+    stores: list[Store]
+    source: str
+
+
+def store_category(tags: dict[str, str]) -> str | None:
+    if tags.get("amenity") in AMENITY_CATEGORIES:
+        return AMENITY_CATEGORIES[tags["amenity"]]
+    if tags.get("tourism") in TOURISM_CATEGORIES:
+        return TOURISM_CATEGORIES[tags["tourism"]]
+    if "shop" in tags:
+        return SHOP_CATEGORIES.get(tags["shop"], SHOP_DEFAULT_CATEGORY)
+    return None
+
+
+def distance_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    half_phi = (phi2 - phi1) / 2
+    half_lambda = math.radians(lon2 - lon1) / 2
+    return 2 * 6371000 * math.asin(math.sqrt(math.sin(half_phi) ** 2 +
+                                             math.cos(phi1) * math.cos(phi2) * math.sin(half_lambda) ** 2))
+
+
+def closest_stores(candidates: Iterable[Store]) -> list[Store]:
+    """Keep the closest entry per named store and category, nearest first."""
+    closest: dict[tuple[str, str], Store] = {}
+    for store in candidates:
+        key = (store["name"].casefold(), store["category"])
+        if key not in closest or store["distance"] < closest[key]["distance"]:
+            closest[key] = store
+    return sorted(closest.values(), key=lambda store: (store["distance"], store["name"]))[:MAX_STORES]
+
+
+def parse_overpass(payload: dict, latitude: float, longitude: float) -> list[Store]:
+    candidates = []
+    for element in payload["elements"]:
+        tags = element.get("tags", {})
+        name = tags.get("name", "").strip()[:120]
+        category = store_category(tags)
+        point = element.get("center", element)
+        if name and category and "lat" in point and "lon" in point:
+            candidates.append(Store(name=name, category=category, distance=round(
+                distance_meters(latitude, longitude, point["lat"], point["lon"]))))
+    return closest_stores(candidates)
+
+
+def parse_google(payload: dict, latitude: float, longitude: float) -> list[Store]:
+    candidates = []
+    for place in payload.get("places", []):
+        name = place.get("displayName", {}).get("text", "").strip()[:120]
+        types = [place.get("primaryType"), *place.get("types", [])]
+        category = next((GOOGLE_CATEGORIES[value] for value in types if value in GOOGLE_CATEGORIES), None)
+        point = place.get("location", {})
+        if name and category and "latitude" in point and "longitude" in point:
+            candidates.append(Store(name=name, category=category, distance=round(
+                distance_meters(latitude, longitude, point["latitude"], point["longitude"]))))
+    return closest_stores(candidates)
+
+
+def fetch_stores(request: urllib.request.Request, parse: Callable[[dict, float, float], list[Store]],
+                 latitude: float, longitude: float) -> list[Store]:
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return parse(json.load(response), latitude, longitude)
+    except urllib.error.HTTPError as error:
+        raise StoreLookupError(f"HTTP {error.code}") from None
+    except (OSError, HTTPException, ValueError, KeyError, TypeError, AttributeError) as error:
+        # Report only the error type: messages could echo the request, and coordinates must stay out of logs.
+        raise StoreLookupError(type(error).__name__) from None
+
+
+def overpass_stores(latitude: float, longitude: float, radius: float) -> list[Store]:
+    around = f"(around:{radius:.0f},{latitude:.6f},{longitude:.6f})"
+    amenities = "|".join(AMENITY_CATEGORIES)
+    tourism = "|".join(TOURISM_CATEGORIES)
+    query = (f'[out:json][timeout:10];(nwr{around}["shop"]["name"];'
+             f'nwr{around}["amenity"~"^({amenities})$"]["name"];'
+             f'nwr{around}["tourism"~"^({tourism})$"]["name"];);out center tags 100;')
+    request = urllib.request.Request(OVERPASS_URL, data=urlencode({"data": query}).encode("ascii"),
+                                     headers={"User-Agent": "Cardwise/1.0 (local rewards calculator)"})
+    return fetch_stores(request, parse_overpass, latitude, longitude)
+
+
+def google_stores(latitude: float, longitude: float, radius: float, key: str) -> list[Store]:
+    body = {"includedTypes": list(GOOGLE_CATEGORIES), "maxResultCount": 20, "rankPreference": "DISTANCE",
+            "locationRestriction": {"circle": {"center": {"latitude": latitude, "longitude": longitude},
+                                               "radius": radius}}}
+    request = urllib.request.Request(GOOGLE_PLACES_URL, data=json.dumps(body).encode("utf-8"), headers={
+        "Content-Type": "application/json", "X-Goog-Api-Key": key, "X-Goog-FieldMask": GOOGLE_FIELD_MASK})
+    return fetch_stores(request, parse_google, latitude, longitude)
+
+
+def nearby_stores(latitude: float, longitude: float, radius: float) -> StoreResults:
+    """Use Google Places when a key is set. Its daily quota or any failure falls back to OpenStreetMap."""
+    key = os.environ.get("CARDWISE_GOOGLE_PLACES_KEY", "").strip()
+    if key:
+        try:
+            return StoreResults(stores=google_stores(latitude, longitude, radius, key), source="google")
+        except StoreLookupError as error:
+            logging.warning("Google Places unavailable (%s); using OpenStreetMap", error)
+    return StoreResults(stores=overpass_stores(latitude, longitude, radius), source="openstreetmap")
+
+
+def coordinate(value: object, maximum: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not -maximum <= value <= maximum:
+        raise ValueError
+    return float(value)
+
+
 class CardwiseServer(ThreadingHTTPServer):
     # On Windows SO_REUSEADDR lets a second server bind a busy port while the first keeps answering.
     allow_reuse_address = os.name != "nt"
 
 
 class CardwiseHandler(SimpleHTTPRequestHandler):
-    def __init__(self, *args, load: Callable[[], Catalog] = load_catalog, **kwargs):
+    def __init__(self, *args, load: Callable[[], Catalog] = load_catalog,
+                 find_stores: Callable[[float, float, float], StoreResults] = nearby_stores, **kwargs):
         self.load = load
+        self.find_stores = find_stores
         super().__init__(*args, **kwargs)
 
     def end_headers(self) -> None:
@@ -273,6 +424,35 @@ class CardwiseHandler(SimpleHTTPRequestHandler):
 
     def do_HEAD(self) -> None:
         self.serve(head_only=True)
+
+    def do_POST(self) -> None:
+        # Coordinates travel in the body so they never appear in URLs or request logs.
+        if urlsplit(self.path).path != "/api/nearby-stores":
+            self.send_json(404, {"error": "API endpoint not found."}, False)
+            return
+        if self.headers.get_content_type() != "application/json":
+            self.send_json(415, {"error": "Send a JSON request."}, False)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+            if not 0 < length <= MAX_BODY_BYTES:
+                raise ValueError
+            body = json.loads(self.rfile.read(length))
+            latitude = coordinate(body["latitude"], 90)
+            longitude = coordinate(body["longitude"], 180)
+            radius = coordinate(body["radius"], 1000)
+            if radius < 50:
+                raise ValueError
+        except (ValueError, KeyError, TypeError):
+            self.send_json(400, {"error": "Send a valid latitude, longitude, and radius from 50 to 1000 meters."}, False)
+            return
+        try:
+            results = self.find_stores(latitude, longitude, radius)
+        except StoreLookupError as error:
+            logging.error("Nearby store lookup failed (%s)", error)
+            self.send_json(502, {"error": "Nearby stores could not be loaded. Choose a category instead."}, False)
+            return
+        self.send_json(200, results, False)
 
 
 def main() -> None:

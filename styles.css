@@ -899,10 +899,22 @@ label[for="amount"] {
   padding:14px 3px 4px
 }
 .remove-card {
-  display:block;
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
   margin-top:8px;
   padding:6px 0;
   cursor:pointer
+}
+.remove-icon {
+  width:12px;
+  height:12px;
+  flex:none;
+  fill:none;
+  stroke:currentColor;
+  stroke-width:2;
+  stroke-linecap:round;
+  stroke-linejoin:round
 }
 .remove-card:hover {
   color:#a2412f;
